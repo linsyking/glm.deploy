@@ -29,6 +29,7 @@ tokenizer.model
 audit/
 logs/
 wire-capture/
+history/
 proxy/
 *.log
 *.jsonl

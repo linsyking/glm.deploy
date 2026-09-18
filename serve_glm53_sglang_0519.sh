@@ -2,7 +2,7 @@
 # Validated SGLang 0.5.19 production launch for GLM-5.3 on both GB200 nodes.
 set -euo pipefail
 source /scratch_local/user_data/yiming/serving/output_policy.env
-export SGLANG_HIDE_THINKING SGLANG_TEXT_ONLY SGLANG_WEB_SEARCH TAVILY_API_KEY
+export SGLANG_HIDE_THINKING SGLANG_TEXT_ONLY SGLANG_WEB_SEARCH SGLANG_STRIP_ATTRIBUTION TAVILY_API_KEY
 export PYTHONPATH="/scratch_local/user_data/yiming/serving${PYTHONPATH:+:$PYTHONPATH}"
 
 ROLE=${1:-head}

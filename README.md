@@ -12,6 +12,7 @@ The validated deployment uses eight GB200 GPUs across two nodes with tensor para
 - `hide_thinking.py`: optional response-only reasoning redaction.
 - `text_only.py`: input guard for clients that try to send images to this text-only checkpoint.
 - `web_search.py`: optional Tavily execution for Anthropic-style server-side web-search requests.
+- `attribution.py`: removes Claude Code's billing-attribution system block to keep prompt prefixes stable.
 - `test_*.py`: offline middleware regression tests.
 - `validate_*.py`, `verify_*.py`, and `check_capabilities.py`: live API probes.
 - `cache_stats.py`: scheduler-log prefix-cache statistics.
@@ -55,6 +56,8 @@ python3 verify_text_only.py
 ```
 
 These live scripts target the original cluster address by default. Update their `BASE`/`base` value before running against another deployment.
+
+Middleware modules are imported directly when the server starts. There is no hot reload; changes to them require `./glm53ctl restart`, which reloads the model and clears the prefix cache.
 
 ## Secrets and generated data
 

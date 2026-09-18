@@ -86,7 +86,8 @@ An optional local output-only filter remains installed:
 - It preserves answer text, tool arguments, usage, requests, generation settings, and server-side stored Responses. It does not disable reasoning computation, save reasoning tokens, or move reasoning into final-answer content. Raw `/generate` is outside its scope.
 - Keep `separate_reasoning=true`; mixing reasoning into answer content defeats structured-field filtering.
 - Upstream 0.5.19 accepts `thinking.display=omitted` but does not implement hiding.
-- Registration of all three local middlewares is patched into `sglang_env_0519/lib/python3.12/site-packages/sglang/srt/entrypoints/http_server.py` on both nodes, immediately after `app.router.route_class = ORJSONRoute`: condition on `get_bool_env_var("SGLANG_HIDE_THINKING")`, import `HideThinkingMiddleware` from `hide_thinking`, and call `app.add_middleware(HideThinkingMiddleware)`; likewise `get_bool_env_var("SGLANG_TEXT_ONLY")` imports `TextOnlyMiddleware` from `text_only`, and `get_bool_env_var("SGLANG_WEB_SEARCH")` imports `WebSearchMiddleware` from `web_search`.
+- Registration of all four local middlewares is patched into `sglang_env_0519/lib/python3.12/site-packages/sglang/srt/entrypoints/http_server.py` on both nodes, immediately after `app.router.route_class = ORJSONRoute`: condition on `get_bool_env_var("SGLANG_HIDE_THINKING")`, import `HideThinkingMiddleware` from `hide_thinking`, and call `app.add_middleware(HideThinkingMiddleware)`; likewise `SGLANG_TEXT_ONLY`/`text_only`, `SGLANG_WEB_SEARCH`/`web_search`, and `SGLANG_STRIP_ATTRIBUTION`/`attribution`.
+- Attribution strip: Claude Code's `x-anthropic-billing-header` system block is removed server-side, keeping the prompt prefix cache-stable regardless of client version (measured 2026-09-18: the block is session-constant in Claude Code 2.1.274 and the cumulative prefix-cache hit rate was 98.7%, so the strip is insurance, not a current fix).
 - Package reinstalls can overwrite registration. The launcher sources the policy file and exports the serving directory through `PYTHONPATH`.
 - To change visibility when requested: update/sync `output_policy.env` on both nodes, restart through the controller, and validate the requested policy.
 - Hiding preserves the current generation, but clients cannot replay hidden reasoning in manually managed history. Later-turn behavior can therefore differ; do not promise complete conversation equivalence. Server-side Responses storage retains reasoning.
@@ -98,7 +99,7 @@ Run relevant checks for the change, from this directory. Live probes generate re
 ```bash
 python3 validate_sglang_0519.py
 python3 check_capabilities.py
-python3 -m unittest test_hide_thinking.py test_text_only.py test_web_search.py
+python3 -m unittest test_hide_thinking.py test_text_only.py test_web_search.py test_attribution.py
 python3 verify_output_policy.py visible
 # Use `hidden` instead only when the hiding policy is enabled.
 python3 verify_text_only.py

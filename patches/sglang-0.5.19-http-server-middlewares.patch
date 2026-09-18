@@ -1,7 +1,7 @@
 diff --git a/python/sglang/srt/entrypoints/http_server.py b/python/sglang/srt/entrypoints/http_server.py
 --- a/python/sglang/srt/entrypoints/http_server.py
 +++ b/python/sglang/srt/entrypoints/http_server.py
-@@ -463,4 +463,13 @@
+@@ -463,4 +463,16 @@
  app.router.route_class = ORJSONRoute
 +if get_bool_env_var("SGLANG_HIDE_THINKING"):
 +    from hide_thinking import HideThinkingMiddleware
@@ -12,6 +12,9 @@ diff --git a/python/sglang/srt/entrypoints/http_server.py b/python/sglang/srt/en
 +if get_bool_env_var("SGLANG_WEB_SEARCH"):
 +    from web_search import WebSearchMiddleware
 +    app.add_middleware(WebSearchMiddleware)
++if get_bool_env_var("SGLANG_STRIP_ATTRIBUTION"):
++    from attribution import StripAttributionMiddleware
++    app.add_middleware(StripAttributionMiddleware)
  app.add_middleware(
      CORSMiddleware,
      allow_origins=["*"],
