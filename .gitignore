@@ -1,0 +1,50 @@
+# Live credentials and machine-local policy
+output_policy.env
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Model weights, Hugging Face downloads, and inference caches
+models/
+checkpoints/
+huggingface/
+.cache/
+hub/
+snapshots/
+blobs/
+*.safetensors
+*.safetensors.index.json
+*.gguf
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.bin
+tokenizer.json
+tokenizer.model
+
+# Runtime and generated evidence (may contain prompts or client metadata)
+audit/
+logs/
+wire-capture/
+proxy/
+*.log
+*.jsonl
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local diagnostic/one-off scripts outside the published deployment
+sync_model_to_node2.sh
+cleanup_legacy.py
+wire_capture.py
+
+# Editor and OS state
+.DS_Store
+.idea/
+.vscode/
+*~

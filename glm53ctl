@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# Control the dual-node GLM-5.3 SGLang deployment from the head node.
+set -euo pipefail
+
+readonly HEAD_HOSTNAME="s04-p1-dgx-02-c02"
+readonly HEAD_IP="10.78.202.30"
+readonly WORKER_IP="10.78.202.29"
+readonly SERVING_DIR="/scratch_local/user_data/yiming/serving"
+readonly SCRATCH_TMP="/scratch_local/user_data/yiming/tmp"
+readonly TMUX_SOCKET="${SCRATCH_TMP}/glm53-tmux"
+readonly HEAD_SESSION="glm53-head"
+readonly WORKER_SESSION="glm53-worker"
+readonly PORT="8000"
+readonly WAIT_SECONDS="360"
+
+usage() {
+    echo "Usage: $0 {start|stop|restart|status|logs}" >&2
+    exit 2
+}
+
+require_head() {
+    if [[ "$(hostname)" != "$HEAD_HOSTNAME" ]]; then
+        echo "Run this controller on $HEAD_HOSTNAME ($HEAD_IP)." >&2
+        exit 1
+    fi
+    mkdir -p "$SCRATCH_TMP" "$SERVING_DIR/logs"
+}
+
+local_session_exists() {
+    tmux -S "$TMUX_SOCKET" has-session -t "$HEAD_SESSION" 2>/dev/null
+}
+
+worker_session_exists() {
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_IP" \
+        "tmux -S '$TMUX_SOCKET' has-session -t '$WORKER_SESSION'" 2>/dev/null
+}
+
+api_is_healthy() {
+    curl --noproxy '*' --silent --show-error --fail --max-time 3 \
+        "http://${HEAD_IP}:${PORT}/health" >/dev/null 2>&1
+}
+
+archive_logs() {
+    local stamp
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    if [[ -f "$SERVING_DIR/sglang_head.log" ]]; then
+        mv "$SERVING_DIR/sglang_head.log" \
+            "$SERVING_DIR/logs/sglang_head-${stamp}.log"
+    fi
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_IP" \
+        "mkdir -p '$SERVING_DIR/logs'; if [ -f '$SERVING_DIR/sglang_worker.log' ]; then mv '$SERVING_DIR/sglang_worker.log' '$SERVING_DIR/logs/sglang_worker-${stamp}.log'; fi"
+}
+
+start_server() {
+    local head_running=0 worker_running=0
+    local_session_exists && head_running=1
+    worker_session_exists && worker_running=1
+
+    if (( head_running || worker_running )); then
+        if (( head_running && worker_running )) && api_is_healthy; then
+            echo "GLM-5.3 is already running and healthy at http://${HEAD_IP}:${PORT}/v1"
+            return 0
+        fi
+        echo "A partial or unhealthy deployment is already running. Run '$0 stop' first." >&2
+        return 1
+    fi
+
+    archive_logs
+    echo "Starting head and worker ranks..."
+    tmux -S "$TMUX_SOCKET" new-session -d -s "$HEAD_SESSION" \
+        "exec bash '$SERVING_DIR/serve_glm53_sglang.sh' head '$PORT' > '$SERVING_DIR/sglang_head.log' 2>&1"
+    if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_IP" \
+        "mkdir -p '$SCRATCH_TMP'; tmux -S '$TMUX_SOCKET' new-session -d -s '$WORKER_SESSION' \"exec bash '$SERVING_DIR/serve_glm53_sglang.sh' worker '$PORT' > '$SERVING_DIR/sglang_worker.log' 2>&1\""; then
+        tmux -S "$TMUX_SOCKET" kill-session -t "$HEAD_SESSION" 2>/dev/null || true
+        echo "Worker launch failed; the head session was stopped." >&2
+        return 1
+    fi
+
+    echo "Waiting up to ${WAIT_SECONDS}s for model loading and CUDA graph capture..."
+    local waited
+    for ((waited = 0; waited < WAIT_SECONDS; waited += 5)); do
+        if api_is_healthy; then
+            echo "GLM-5.3 is ready at http://${HEAD_IP}:${PORT}/v1"
+            return 0
+        fi
+        if ! local_session_exists || ! worker_session_exists; then
+            echo "A rank exited during startup. Recent logs:" >&2
+            tail -n 30 "$SERVING_DIR/sglang_head.log" >&2 || true
+            ssh "$WORKER_IP" "tail -n 30 '$SERVING_DIR/sglang_worker.log'" >&2 || true
+            return 1
+        fi
+        sleep 5
+    done
+    echo "Startup did not become healthy within ${WAIT_SECONDS}s. Sessions were left running for inspection." >&2
+    return 1
+}
+
+stop_server() {
+    local stopped=0
+    if local_session_exists; then
+        tmux -S "$TMUX_SOCKET" kill-session -t "$HEAD_SESSION"
+        stopped=1
+    fi
+    if worker_session_exists; then
+        ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_IP" \
+            "tmux -S '$TMUX_SOCKET' kill-session -t '$WORKER_SESSION'"
+        stopped=1
+    fi
+
+    # The launch scripts use exec, so closing each tmux session terminates its
+    # rank and scheduler children. Wait briefly for GPU memory to be released.
+    local waited
+    for ((waited = 0; waited < 60; waited += 2)); do
+        if ! ps -eo args= | awk '/[s]glang.launch_server/ && /--node-rank 0/ { found=1 } END { exit !found }' && \
+           ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_IP" \
+               "ps -eo args= | awk '/[s]glang.launch_server/ && /--node-rank 1/ { found=1 } END { exit !found }'"; then
+            if (( stopped )); then
+                echo "GLM-5.3 stopped on both nodes. Logs were preserved."
+            else
+                echo "GLM-5.3 is already stopped."
+            fi
+            return 0
+        fi
+        sleep 2
+    done
+    echo "One or more SGLang rank processes remain after 60s; inspect '$0 status'." >&2
+    return 1
+}
+
+status_server() {
+    local head_session="down" worker_session="down" health="down"
+    local head_ranks worker_ranks
+    local_session_exists && head_session="up"
+    worker_session_exists && worker_session="up"
+    api_is_healthy && health="healthy"
+    head_ranks="$(ps -eo comm= | awk '/^sglang::schedul/ { n++ } END { print n+0 }')"
+    worker_ranks="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_IP" "ps -eo comm= | awk '/^sglang::schedul/ { n++ } END { print n+0 }'" 2>/dev/null || echo unreachable)"
+    echo "API:            $health (http://${HEAD_IP}:${PORT}/v1)"
+    echo "Head session:   $head_session; scheduler ranks: $head_ranks/4"
+    echo "Worker session: $worker_session; scheduler ranks: $worker_ranks/4"
+    [[ "$health" == "healthy" && "$head_session" == "up" && "$worker_session" == "up" && "$head_ranks" == "4" && "$worker_ranks" == "4" ]]
+}
+
+show_logs() {
+    echo "Head:   $SERVING_DIR/sglang_head.log"
+    echo "Worker: $WORKER_IP:$SERVING_DIR/sglang_worker.log"
+    echo "Follow with: tail -f '$SERVING_DIR/sglang_head.log'"
+    echo "Worker with: ssh '$WORKER_IP' tail -f '$SERVING_DIR/sglang_worker.log'"
+}
+
+require_head
+case "${1:-}" in
+    start) start_server ;;
+    stop) stop_server ;;
+    restart) stop_server; start_server ;;
+    status) status_server ;;
+    logs) show_logs ;;
+    *) usage ;;
+esac
